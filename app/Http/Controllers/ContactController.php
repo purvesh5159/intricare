@@ -16,41 +16,42 @@ class ContactController extends Controller
         $contacts = Contact::where('is_merged', '=', 0)->get();
         $allContacts = Contact::where('is_merged', '=', 0)->get();
         $customFields = CustomField::all();
-        return view('contacts.index', compact('contacts','allContacts','customFields'));
+        return view('contacts.index', compact('contacts', 'allContacts', 'customFields'));
     }
 
     public function fetch(Request $request)
     {
         $contacts = Contact::query()
-        ->when($request->name, fn($q) => $q->where('name', 'like', '%' . $request->name . '%'))
-        ->when($request->email, fn($q) => $q->where('email', 'like', '%' . $request->email . '%'))
-        ->when($request->gender, fn($q) => $q->where('gender', $request->gender))
-        ->when($request->phone, fn($q) => $q->where('phone', 'like', '%' . $request->phone . '%'))
-        ->get();
+            ->when($request->name, fn($q) => $q->where('name', 'like', '%' . $request->name . '%'))
+            ->when($request->email, fn($q) => $q->where('email', 'like', '%' . $request->email . '%'))
+            ->when($request->gender, fn($q) => $q->where('gender', $request->gender))
+            ->when($request->phone, fn($q) => $q->where('phone', 'like', '%' . $request->phone . '%'))
+            ->get();
 
         return view('partials.contacts-table', compact('contacts'));
 
     }
 
-    public function show($id) {
-    $contact = Contact::with('customFieldValues')->findOrFail($id);
-    $contact->profile_image_url = asset('storage/' . $contact->profile_image);
-    $contact->additional_file_url = asset('storage/' . $contact->additional_file);
-    $customFields = [];
-    foreach ($contact->customFieldValues as $cf) {
-        $customFields[$cf->custom_field_id] = $cf->value;
-    }
-      return response()->json([
-        'id' => $contact->id,
-        'name' => $contact->name,
-        'email' => $contact->email,
-        'phone' => $contact->phone,
-        'gender' => $contact->gender,
-        'profile_image_url' => $contact->profile_image_url,
-        'additional_file_url' => $contact->additional_file_url,
-        'custom_fields' => $customFields
-       
-    ]);
+    public function show($id)
+    {
+        $contact = Contact::with('customFieldValues')->findOrFail($id);
+        $contact->profile_image_url = asset('storage/' . $contact->profile_image);
+        $contact->additional_file_url = asset('storage/' . $contact->additional_file);
+        $customFields = [];
+        foreach ($contact->customFieldValues as $cf) {
+            $customFields[$cf->custom_field_id] = $cf->value;
+        }
+        return response()->json([
+            'id' => $contact->id,
+            'name' => $contact->name,
+            'email' => $contact->email,
+            'phone' => $contact->phone,
+            'gender' => $contact->gender,
+            'profile_image_url' => $contact->profile_image_url,
+            'additional_file_url' => $contact->additional_file_url,
+            'custom_fields' => $customFields
+
+        ]);
     }
 
     public function store(Request $request)
@@ -134,6 +135,27 @@ class ContactController extends Controller
 
     public function update(Request $request, $id)
     {
+        $rules = [
+            'name' => 'required|string|max:255',
+            'email' => 'required|email',
+            'phone' => 'required',
+            'gender' => 'required|in:Male,Female',
+        ];
+
+        if ($request->has('custom_fields')) {
+            foreach ($request->custom_fields as $field_id => $value) {
+                //  $rules["custom_fields.$field_id"] = 'required'; // Adjust rule per type if needed
+            }
+        }
+
+        $validator = Validator::make($request->all(), $rules);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'errors' => $validator->errors()
+            ], 422);
+        }
+
         $contact = Contact::findOrFail($id);
         $contact->update($request->only('name', 'email', 'phone', 'gender'));
 
@@ -170,50 +192,89 @@ class ContactController extends Controller
     }
 
     public function diff($masterId, $secId)
-{
-    $m = Contact::findOrFail($masterId);
-    $s = Contact::findOrFail($secId);
+    {
+        $master = Contact::with('customFieldValues')->findOrFail($masterId);
+        $secondary = Contact::with('customFieldValues')->findOrFail($secId);
+        $customFields = CustomField::all();
 
-    $html = '<h6>Emails</h6><p>'.$m->email.'<br>'.$s->email.'</p>';
-    $html .= '<h6>Phones</h6><p>'.$m->phone.'<br>'.$s->phone.'</p>';
+        $getValues = function ($contact) use ($customFields) {
+            $values = [];
+            foreach ($customFields as $field) {
+                $value = optional($contact->customFieldValues->where('custom_field_id', $field->id)->first())->value ?? '[—]';
+                $values[] = [
+                    'label' => $field->name,
+                    'value' => $value
+                ];
+            }
+            return $values;
+        };
 
-    $html .= '<h6>Custom Fields</h6><table class="table"><tr><th>Field</th><th>Master</th><th>Secondary</th></tr>';
-    $fields = CustomField::all();
-    foreach ($fields as $f) {
-       $mv = $m->customFields->where('custom_field_id', $f->id)->first()->value ?? '[—]';
-       $sv = $s->customFields->where('custom_field_id', $f->id)->first()->value ?? '[—]';
-       $html .= "<tr><td>{$f->name}</td><td>{$mv}</td><td>{$sv}</td></tr>";
+        return response()->json([
+            'master' => [
+                'id' => $master->id,
+                'name' => $master->name,
+                'email' => $master->email,
+                'phone' => $master->phone,
+                'custom_fields' => $getValues($master)
+            ],
+            'secondary' => [
+                'id' => $secondary->id,
+                'name' => $secondary->name,
+                'email' => $secondary->email,
+                'phone' => $secondary->phone,
+                'custom_fields' => $getValues($secondary)
+            ]
+        ]);
     }
-    $html .= '</table>';
-    return $html;
-}
-public function merge(Request $r)
-{
-    $master = Contact::findOrFail($r->master_id);
-    $sec = Contact::findOrFail($r->secondary_id);
 
-    if ($sec->email && !str_contains($master->email, $sec->email)) {
-        $master->email = trim(($master->email ?: '') . ', ' . $sec->email, ', ');
-    }
-    if ($sec->phone && !str_contains($master->phone, $sec->phone)) {
-        $master->phone = trim(($master->phone ?: '') . ', ' . $sec->phone, ', ');
-    }
+    public function merge(Request $r)
+    {
+        $master = Contact::findOrFail($r->master_id);
+        $sec = Contact::findOrFail($r->secondary_id);
 
-    foreach ($sec->customFields as $cv) {
-        $exists = $master->customFields()
-            ->where('custom_field_id', $cv->custom_field_id)
-            ->first();
-        if (!$exists) {
-            $cv->contact_id = $master->id;
-            $cv->save();
+        // Merge email and phone if needed
+        if ($sec->email && !str_contains($master->email, $sec->email)) {
+            $master->email = trim(($master->email ?: '') . ', ' . $sec->email, ', ');
         }
+
+        if ($sec->phone && !str_contains($master->phone, $sec->phone)) {
+            $master->phone = trim(($master->phone ?: '') . ', ' . $sec->phone, ', ');
+        }
+
+        // Load custom fields
+        $sec->load('customFieldValues');
+        $master->load('customFieldValues');
+
+        // Convert master's custom field values to associative array for easier access
+        $masterFields = $master->customFieldValues->keyBy('custom_field_id');
+
+        foreach ($sec->customFieldValues as $secField) {
+            $masterField = $masterFields->get($secField->custom_field_id);
+
+            // If master has no field or has it but it's empty, then update
+            if (!$masterField || empty(trim($masterField->value))) {
+                ContactCustomFieldValue::updateOrCreate(
+                    [
+                        'contact_id' => $master->id,
+                        'custom_field_id' => $secField->custom_field_id,
+                    ],
+                    [
+                        'value' => $secField->value,
+                    ]
+                );
+            }
+        }
+
+        // Mark secondary as merged
+        $sec->update([
+            'is_merged' => true,
+            'merged_into' => $master->id,
+        ]);
+
+        $master->save();
+
+        return response()->json(['message' => 'Merged successfully']);
     }
-
-    $sec->update(['is_merged'=>true, 'merged_into'=>$master->id]);
-    $master->save();
-
-    return response()->json(['message' => 'Merged successfully']);
-}
 
 
 }

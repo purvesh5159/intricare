@@ -6,7 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 
 class Contact extends Model
 {
-     protected $fillable = ['name', 'email', 'phone', 'gender', 'profile_image', 'additional_file', 'is_merged', 'merged_into'];
+    protected $fillable = ['name', 'email', 'phone', 'gender', 'profile_image', 'additional_file', 'is_merged', 'merged_into'];
 
     public function customFieldValues()
     {
